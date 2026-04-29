@@ -4,6 +4,7 @@ import {
   fileExtensionFromPath,
   isImagePreviewPath,
   isMarkdownPreviewPath,
+  isPdfPreviewPath,
   isTextPreviewPath,
   previewKindForPath
 } from "./file-preview";
@@ -22,6 +23,12 @@ describe("file preview classification", () => {
     expect(isImagePreviewPath("assets/diagram.svg")).toBe(true);
     expect(isImagePreviewPath("assets/icon.avif")).toBe(true);
     expect(previewKindForPath("assets/mockup.webp")).toBe("image");
+  });
+
+  it("detects pdf files", () => {
+    expect(isPdfPreviewPath("docs/report.pdf")).toBe(true);
+    expect(isPdfPreviewPath("docs/REPORT.PDF")).toBe(true);
+    expect(previewKindForPath("docs/report.pdf")).toBe("pdf");
   });
 
   it("detects code, config, shell, and extensionless text files", () => {
@@ -43,7 +50,6 @@ describe("file preview classification", () => {
     expect(previewKindForPath("archive/build.zip")).toBeUndefined();
     expect(previewKindForPath("bin/app.exe")).toBeUndefined();
     expect(previewKindForPath("media/movie.mp4")).toBeUndefined();
-    expect(previewKindForPath("docs/report.pdf")).toBeUndefined();
   });
 
   it("normalizes basename and extension parsing", () => {

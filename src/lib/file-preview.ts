@@ -1,4 +1,4 @@
-export type FilePreviewKind = "markdown" | "text" | "image";
+export type FilePreviewKind = "markdown" | "text" | "image" | "pdf";
 
 const markdownExtensions = new Set([
   "md",
@@ -22,6 +22,8 @@ const imageExtensions = new Set([
   "ico",
   "avif"
 ]);
+
+const pdfExtensions = new Set(["pdf"]);
 
 const textExtensions = new Set([
   "txt",
@@ -277,6 +279,10 @@ export function isImagePreviewPath(path: string) {
   return imageExtensions.has(fileExtensionFromPath(path));
 }
 
+export function isPdfPreviewPath(path: string) {
+  return pdfExtensions.has(fileExtensionFromPath(path));
+}
+
 export function isTextPreviewPath(path: string) {
   const extension = fileExtensionFromPath(path);
   if (textExtensions.has(extension)) {
@@ -301,6 +307,9 @@ export function previewKindForPath(path: string): FilePreviewKind | undefined {
   }
   if (isImagePreviewPath(path)) {
     return "image";
+  }
+  if (isPdfPreviewPath(path)) {
+    return "pdf";
   }
   if (isTextPreviewPath(path)) {
     return "text";

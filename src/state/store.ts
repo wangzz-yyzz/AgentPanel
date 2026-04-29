@@ -147,6 +147,8 @@ function previewLabelForKind(kind: FilePreviewKind) {
       return "Text";
     case "image":
       return "Image";
+    case "pdf":
+      return "PDF";
   }
 }
 
@@ -1171,7 +1173,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     try {
-      if (kind === "image") {
+      if (kind === "image" || kind === "pdf") {
         const dataUrl = await readFileAsDataUrl(path);
         set((state) =>
           state.filePreview?.path === path

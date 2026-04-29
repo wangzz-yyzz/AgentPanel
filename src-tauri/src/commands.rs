@@ -164,6 +164,7 @@ fn mime_type_for_path(path: &Path) -> Option<&'static str> {
         "bmp" => Some("image/bmp"),
         "ico" => Some("image/x-icon"),
         "avif" => Some("image/avif"),
+        "pdf" => Some("application/pdf"),
         _ => None,
     }
 }
@@ -186,7 +187,7 @@ pub fn read_file_as_data_url(path: String) -> Result<String, AppError> {
 
     let mime_type = mime_type_for_path(&path).ok_or_else(|| {
         AppError::message(format!(
-            "Unable to preview this file as an image: {}",
+            "Unable to preview this file in the current viewer: {}",
             path.display()
         ))
     })?;

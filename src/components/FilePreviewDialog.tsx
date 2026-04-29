@@ -3,7 +3,7 @@ import { FileImage, FileText, LoaderCircle, ScrollText, X } from "lucide-react";
 import { MarkdownDocument } from "./MarkdownDocument";
 import { useAppStore } from "../state/store";
 
-function previewMeta(kind: "markdown" | "text" | "image") {
+function previewMeta(kind: "markdown" | "text" | "image" | "pdf") {
   switch (kind) {
     case "markdown":
       return {
@@ -22,6 +22,12 @@ function previewMeta(kind: "markdown" | "text" | "image") {
         label: "Image preview",
         loadingLabel: "Loading image preview...",
         Icon: FileImage
+      };
+    case "pdf":
+      return {
+        label: "PDF preview",
+        loadingLabel: "Loading PDF preview...",
+        Icon: FileText
       };
   }
 }
@@ -106,6 +112,20 @@ export function FilePreviewDialog() {
                 />
               ) : (
                 <div className="text-sm text-slate-400">This image file is empty.</div>
+              )}
+            </div>
+          ) : preview.kind === "pdf" ? (
+            <div className="overflow-hidden rounded-[24px] border border-slate-200 bg-[linear-gradient(135deg,rgba(241,245,249,0.95),rgba(255,255,255,0.98))] p-2">
+              {preview.dataUrl ? (
+                <iframe
+                  src={preview.dataUrl}
+                  title={preview.title}
+                  className="h-[70vh] w-full rounded-[18px] border border-slate-200 bg-white"
+                />
+              ) : (
+                <div className="flex min-h-[320px] items-center justify-center text-sm text-slate-400">
+                  This PDF file is empty.
+                </div>
               )}
             </div>
           ) : preview.kind === "text" ? (
