@@ -2,6 +2,7 @@ pub mod commands;
 pub mod error;
 pub mod models;
 pub mod profile_store;
+pub mod preview;
 pub mod pty;
 pub mod workspace_watcher;
 
@@ -45,12 +46,17 @@ pub fn run() {
             commands::read_text_file,
             commands::read_text_preview_file,
             commands::read_file_as_data_url,
+            commands::read_binary_file,
+            commands::read_docx_preview,
+            commands::read_spreadsheet_preview,
+            commands::read_presentation_preview,
             commands::write_text_file,
             commands::list_directory,
             commands::list_markdown_directory,
             commands::list_skill_files,
             commands::import_skill_file,
             commands::import_skill_items,
+            commands::list_agent_history,
             commands::get_default_knowledge_base_path,
             commands::count_markdown_files,
             commands::watch_workspace_directory,

@@ -181,7 +181,7 @@ export function WorkspaceRail() {
             {manageMode ? "Done" : "Manage"}
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+        <div className="terminal-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
           <div className="mb-4 rounded-[22px] border border-slate-200/80 bg-slate-50 px-3 py-3 text-sm text-slate-500">
             {workspaces.length} active workspaces
           </div>

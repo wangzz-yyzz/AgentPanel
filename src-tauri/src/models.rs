@@ -65,3 +65,33 @@ pub struct SkillFileEntry {
     pub is_directory: bool,
     pub preview_path: String,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentHistoryEntry {
+    pub agent_kind: String,
+    pub session_id: String,
+    pub title: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpreadsheetPreviewPayload {
+    pub kind: String,
+    pub sheet_name: String,
+    pub sheet_names: Vec<String>,
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub total_rows: usize,
+    pub total_columns: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PresentationPreviewSlide {
+    pub index: usize,
+    pub title: String,
+    pub bullets: Vec<String>,
+    pub notes: Option<String>,
+}

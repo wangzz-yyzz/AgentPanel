@@ -6,7 +6,7 @@ import { FilePreviewDialog } from "./components/FilePreviewDialog";
 import { ProfileManager } from "./components/ProfileManager";
 import { WorkspaceRail } from "./components/WorkspaceRail";
 import { TerminalDeck } from "./components/TerminalDeck";
-import { SupportPanelGrid, WorkspaceExtensions } from "./components/SupportPanelGrid";
+import { SupportPanelGrid } from "./components/SupportPanelGrid";
 import { useAppStore } from "./state/store";
 import type { SessionExitPayload, SessionOutputPayload } from "./types/terminal";
 
@@ -55,7 +55,7 @@ export function App() {
     <div className="min-h-screen text-brand-dark">
       <div className="mx-auto flex min-h-screen max-w-[1800px] gap-4 px-3 py-3 md:px-5 md:py-4">
         <WorkspaceRail />
-        <main className="flex min-h-[calc(100vh-1.5rem)] flex-1 flex-col gap-4">
+        <main className="terminal-scrollbar flex min-h-[calc(100vh-1.5rem)] flex-1 flex-col gap-4 overflow-y-auto pr-1">
           <section
             className="animate-enter flex flex-wrap items-center justify-between gap-3 rounded-[28px] border border-slate-200 bg-white px-4 py-3 shadow-[0_6px_18px_rgba(34,56,110,0.05)]"
             style={{ animationDelay: "40ms" }}
@@ -91,9 +91,6 @@ export function App() {
             <SupportPanelGrid />
             <div className="animate-enter" style={{ animationDelay: "180ms" }}>
               <ProfileManager />
-            </div>
-            <div className="animate-enter" style={{ animationDelay: "220ms" }}>
-              <WorkspaceExtensions />
             </div>
           </section>
         </main>

@@ -5,8 +5,6 @@ import type {
   BuiltinSupportPanelState,
   CalendarNoteRecord,
   CalendarPanelData,
-  CustomPanelRecord,
-  CustomPanelRegistryEntry,
   KnowledgePanelData,
   SupportPanelsState,
   TodoPanelData,
@@ -308,8 +306,6 @@ function normalizeWorkspaceSupportPanels(workspaceId: string, candidate: unknown
   }
 
   const record = candidate as Partial<WorkspaceSupportPanels>;
-  const customPanels = Array.isArray(record.customPanels) ? record.customPanels : [];
-  const registry = Array.isArray(record.registry) ? record.registry : [];
 
   return {
     builtinPanels: {
@@ -317,10 +313,7 @@ function normalizeWorkspaceSupportPanels(workspaceId: string, candidate: unknown
       calendar: normalizeBuiltinPanelState("calendar", record.builtinPanels?.calendar),
       skills: normalizeBuiltinPanelState("skills", record.builtinPanels?.skills),
       knowledge: normalizeBuiltinPanelState("knowledge", record.builtinPanels?.knowledge)
-    },
-    customPanels,
-    registry,
-    registryPath: typeof record.registryPath === "string" && record.registryPath.trim() ? record.registryPath : base.registryPath
+    }
   };
 }
 
@@ -338,10 +331,7 @@ export function createDefaultWorkspaceSupportPanels(workspaceId: string): Worksp
   }, {} as WorkspaceSupportPanels["builtinPanels"]);
 
   return {
-    builtinPanels,
-    customPanels: [],
-    registry: [],
-    registryPath: `./extensions/local/${workspaceId}.panels.json`
+    builtinPanels
   };
 }
 
@@ -487,16 +477,5 @@ export function upsertWorkspaceSupportPanels(
   return {
     ...state,
     [workspaceId]: next
-  };
-}
-
-export function toRegistryEntry(panel: CustomPanelRecord): CustomPanelRegistryEntry {
-  return {
-    id: panel.id,
-    workspaceId: panel.workspaceId,
-    title: panel.title,
-    description: panel.description,
-    createdAt: panel.createdAt,
-    updatedAt: panel.updatedAt
   };
 }

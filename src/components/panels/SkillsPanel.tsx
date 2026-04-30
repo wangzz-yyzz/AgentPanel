@@ -294,7 +294,7 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
                 </button>
               </div>
 
-              <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+              <div className="terminal-scrollbar min-h-0 flex-1 overflow-y-auto px-5 py-5">
                 <div className="mb-4 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -460,7 +460,7 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
         {statusMessage ? <div className="animate-panel-swap mt-2 text-sm text-[#125b50]">{statusMessage}</div> : null}
       </div>
 
-      <div className="h-[300px] overflow-y-auto pr-1">
+      <div className="terminal-scrollbar h-[300px] overflow-y-auto pr-1">
         {error ? (
           <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">{error}</div>
         ) : loading ? (

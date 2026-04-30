@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AgentProfile } from "../types/agent";
-import type { CreateSessionInput } from "../types/terminal";
+import type { AgentHistoryEntry, CreateSessionInput } from "../types/terminal";
 
 export async function createSession(input: CreateSessionInput) {
   return invoke<string>("create_session", {
@@ -44,6 +44,39 @@ export async function readFileAsDataUrl(path: string) {
   return invoke<string>("read_file_as_data_url", { path });
 }
 
+export async function readBinaryFile(path: string) {
+  return invoke<number[]>("read_binary_file", { path });
+}
+
+export type SpreadsheetPreviewPayload = {
+  kind: "spreadsheet";
+  sheetName: string;
+  sheetNames: string[];
+  columns: string[];
+  rows: string[][];
+  totalRows: number;
+  totalColumns: number;
+};
+
+export type PresentationPreviewSlide = {
+  index: number;
+  title: string;
+  bullets: string[];
+  notes?: string | null;
+};
+
+export async function readDocxPreview(path: string) {
+  return invoke<string>("read_docx_preview", { path });
+}
+
+export async function readSpreadsheetPreview(path: string) {
+  return invoke<SpreadsheetPreviewPayload>("read_spreadsheet_preview", { path });
+}
+
+export async function readPresentationPreview(path: string) {
+  return invoke<PresentationPreviewSlide[]>("read_presentation_preview", { path });
+}
+
 export async function writeTextFile(path: string, contents: string) {
   return invoke("write_text_file", { path, contents });
 }
@@ -82,6 +115,10 @@ export async function importSkillFile(workspacePath: string, sourcePath: string)
 
 export async function importSkillItems(workspacePath: string, sourcePaths: string[]) {
   return invoke<SkillFileEntry[]>("import_skill_items", { workspacePath, sourcePaths });
+}
+
+export async function listAgentHistory(workspacePath: string, agentKinds: string[]) {
+  return invoke<AgentHistoryEntry[]>("list_agent_history", { workspacePath, agentKinds });
 }
 
 export async function getDefaultKnowledgeBasePath() {

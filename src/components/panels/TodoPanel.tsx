@@ -687,7 +687,7 @@ export function TodoPanel({ panel, onPatch }: TodoPanelProps) {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+      <div className="terminal-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
         {filteredTasks.length === 0 ? (
           <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-5 text-sm text-slate-500">
             No tasks in this filter yet.

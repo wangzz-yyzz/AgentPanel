@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import "xterm/css/xterm.css";
+import "@xterm/xterm/css/xterm.css";
 import { useXterm } from "../hooks/useXterm";
 import { resizeSession, writeSessionInput } from "../lib/tauri";
 import { useAppStore } from "../state/store";
@@ -27,8 +27,11 @@ const terminalOptions = {
 
 export function TerminalViewport({ session }: TerminalViewportProps) {
   const syncSessionSize = useAppStore((state) => state.syncSessionSize);
+  const multilineEnter =
+    session?.profile.id === "codex" || session?.profile.id === "claude" ? "line-feed" : "default";
   const { containerRef, fitAddon, terminal } = useXterm({
     options: terminalOptions,
+    multilineEnter,
     onData: (data) => {
       const targetSessionId = session?.backendSessionId;
       if (targetSessionId) {

@@ -37,3 +37,10 @@ export type SessionExitPayload = {
   sessionId: string;
   exitCode: number | null;
 };
+
+export type AgentHistoryEntry = {
+  agentKind: "claude" | "codex";
+  sessionId: string;
+  title: string;
+  updatedAt: string;
+};

@@ -381,7 +381,7 @@ export function KnowledgeBasePanel({ panel, onPatch }: KnowledgeBasePanelProps) 
         </div>
       </div>
 
-      <div key={rootPath || "empty"} className="animate-panel-swap h-[300px] overflow-y-auto pr-1">
+      <div key={rootPath || "empty"} className="terminal-scrollbar animate-panel-swap h-[300px] overflow-y-auto pr-1">
         {pathError ? (
           <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">{pathError}</div>
         ) : !rootPath ? (

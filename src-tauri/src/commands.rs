@@ -7,8 +7,18 @@ use tauri::State;
 
 use crate::{
     error::AppError,
-    models::{AgentProfile, CreateSessionInput, DirectoryEntry, SkillFileEntry},
+    models::{
+        AgentHistoryEntry, AgentProfile, CreateSessionInput, DirectoryEntry, PresentationPreviewSlide,
+        SkillFileEntry, SpreadsheetPreviewPayload,
+    },
+    preview,
     AppState,
+};
+
+use serde::Deserialize;
+use std::{
+    collections::{BTreeMap, HashSet},
+    io::{BufRead, BufReader},
 };
 
 #[tauri::command]
@@ -197,6 +207,40 @@ pub fn read_file_as_data_url(path: String) -> Result<String, AppError> {
 }
 
 #[tauri::command]
+pub fn read_binary_file(path: String) -> Result<Vec<u8>, AppError> {
+    let path = PathBuf::from(path);
+    if !path.exists() {
+        return Err(AppError::message(format!(
+            "File does not exist: {}",
+            path.display()
+        )));
+    }
+    if !path.is_file() {
+        return Err(AppError::message(format!(
+            "Path is not a file: {}",
+            path.display()
+        )));
+    }
+
+    Ok(fs::read(path)?)
+}
+
+#[tauri::command]
+pub fn read_docx_preview(path: String) -> Result<String, AppError> {
+    preview::read_docx_preview(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn read_spreadsheet_preview(path: String) -> Result<SpreadsheetPreviewPayload, AppError> {
+    preview::read_spreadsheet_preview(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn read_presentation_preview(path: String) -> Result<Vec<PresentationPreviewSlide>, AppError> {
+    preview::read_presentation_preview(Path::new(&path))
+}
+
+#[tauri::command]
 pub fn write_text_file(path: String, contents: String) -> Result<(), AppError> {
     let path = PathBuf::from(path);
     if let Some(parent) = path.parent() {
@@ -204,6 +248,278 @@ pub fn write_text_file(path: String, contents: String) -> Result<(), AppError> {
     }
     fs::write(path, contents)?;
     Ok(())
+}
+
+fn user_home_dir() -> Result<PathBuf, AppError> {
+    std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| AppError::message("Unable to determine the user home directory."))
+}
+
+fn normalize_history_path(path: &Path) -> String {
+    let raw = path.to_string_lossy().replace('\\', "/");
+    if cfg!(target_os = "windows") {
+        raw.to_ascii_lowercase()
+    } else {
+        raw
+    }
+}
+
+fn workspace_matches(candidate: &str, workspace_path: &str) -> bool {
+    normalize_history_path(Path::new(candidate)) == normalize_history_path(Path::new(workspace_path))
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSessionIndexRecord {
+    id: String,
+    #[serde(default)]
+    thread_name: Option<String>,
+    updated_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSessionMetaEnvelope {
+    #[serde(rename = "type")]
+    entry_type: String,
+    payload: Option<CodexSessionMetaPayload>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSessionMetaPayload {
+    id: String,
+    cwd: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexHistoryRecord {
+    session_id: String,
+    ts: i64,
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ClaudeHistoryRecord {
+    #[serde(default)]
+    display: Option<String>,
+    timestamp: i64,
+    project: String,
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+fn parse_jsonl_lines<T>(path: &Path) -> Result<Vec<T>, AppError>
+where
+    T: for<'de> Deserialize<'de>,
+{
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(path)?;
+    let reader = BufReader::new(file);
+    let mut records = Vec::new();
+    for line in reader.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(record) = serde_json::from_str::<T>(trimmed) {
+            records.push(record);
+        }
+    }
+    Ok(records)
+}
+
+fn visit_jsonl_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), AppError> {
+    if !root.exists() {
+        return Ok(());
+    }
+
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let metadata = entry.metadata()?;
+        if metadata.is_dir() {
+            visit_jsonl_files(&path, files)?;
+            continue;
+        }
+        let is_jsonl = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("jsonl"))
+            .unwrap_or(false);
+        if is_jsonl {
+            files.push(path);
+        }
+    }
+
+    Ok(())
+}
+
+fn load_codex_history(workspace_path: &str) -> Result<Vec<AgentHistoryEntry>, AppError> {
+    let codex_root = user_home_dir()?.join(".codex");
+    let index_path = codex_root.join("session_index.jsonl");
+    let session_records = parse_jsonl_lines::<CodexSessionIndexRecord>(&index_path)?;
+    let history_path = codex_root.join("history.jsonl");
+    let history_records = parse_jsonl_lines::<CodexHistoryRecord>(&history_path)?;
+
+    let mut workspace_session_ids = HashSet::new();
+    let mut session_files = Vec::new();
+    visit_jsonl_files(&codex_root.join("sessions"), &mut session_files)?;
+    for path in session_files {
+        let file = fs::File::open(&path)?;
+        let reader = BufReader::new(file);
+        for line in reader.lines() {
+            let line = line?;
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(record) = serde_json::from_str::<CodexSessionMetaEnvelope>(trimmed) else {
+                continue;
+            };
+            if record.entry_type != "session_meta" {
+                continue;
+            }
+            let Some(payload) = record.payload else {
+                continue;
+            };
+            if workspace_matches(&payload.cwd, workspace_path) {
+                workspace_session_ids.insert(payload.id);
+            }
+            break;
+        }
+    }
+
+    let indexed_by_id = session_records
+        .into_iter()
+        .map(|record| (record.id.clone(), record))
+        .collect::<BTreeMap<_, _>>();
+    let mut history_by_id = BTreeMap::<String, AgentHistoryEntry>::new();
+
+    for record in indexed_by_id
+        .values()
+        .filter(|record| workspace_session_ids.contains(&record.id))
+    {
+        history_by_id.insert(
+            record.id.clone(),
+            AgentHistoryEntry {
+                agent_kind: "codex".to_string(),
+                session_id: record.id.clone(),
+                title: record
+                    .thread_name
+                    .clone()
+                    .filter(|value| !value.trim().is_empty())
+                    .unwrap_or_else(|| "Untitled session".to_string()),
+                updated_at: record.updated_at.clone(),
+            },
+        );
+    }
+
+    for record in history_records {
+        if !workspace_session_ids.contains(&record.session_id) {
+            continue;
+        }
+        if record.text.trim().is_empty() {
+            continue;
+        }
+
+        let updated_at = record.ts.to_string();
+        history_by_id
+            .entry(record.session_id.clone())
+            .and_modify(|entry| {
+                if entry.title.trim().is_empty() || entry.title == "Untitled session" {
+                    entry.title = record.text.trim().to_string();
+                }
+                let existing_ts = entry.updated_at.parse::<i64>().ok();
+                let next_ts = updated_at.parse::<i64>().ok();
+                if let (Some(existing), Some(next)) = (existing_ts, next_ts) {
+                    if next > existing {
+                        entry.updated_at = updated_at.clone();
+                    }
+                }
+            })
+            .or_insert_with(|| AgentHistoryEntry {
+                agent_kind: "codex".to_string(),
+                session_id: record.session_id.clone(),
+                title: record.text.trim().to_string(),
+                updated_at: updated_at.clone(),
+            });
+    }
+
+    let mut history = history_by_id
+        .into_values()
+        .map(|entry| AgentHistoryEntry {
+            agent_kind: "codex".to_string(),
+            session_id: entry.session_id,
+            title: entry.title,
+            updated_at: entry.updated_at,
+        })
+        .collect::<Vec<_>>();
+    history.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(history)
+}
+
+fn timestamp_millis_to_string(timestamp_ms: i64) -> String {
+    timestamp_ms.to_string()
+}
+
+fn load_claude_history(workspace_path: &str) -> Result<Vec<AgentHistoryEntry>, AppError> {
+    let claude_root = user_home_dir()?.join(".claude");
+    let history_path = claude_root.join("history.jsonl");
+    let history_records = parse_jsonl_lines::<ClaudeHistoryRecord>(&history_path)?;
+    if history_records.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut latest_by_session = BTreeMap::<String, AgentHistoryEntry>::new();
+    for record in history_records {
+        if !workspace_matches(&record.project, workspace_path) {
+            continue;
+        }
+
+        let title = record
+            .display
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        if title.is_empty() {
+            continue;
+        }
+
+        latest_by_session.insert(
+            record.session_id.clone(),
+            AgentHistoryEntry {
+                agent_kind: "claude".to_string(),
+                session_id: record.session_id,
+                title,
+                updated_at: timestamp_millis_to_string(record.timestamp),
+            },
+        );
+    }
+
+    let mut history = latest_by_session.into_values().collect::<Vec<_>>();
+    history.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(history)
+}
+
+#[tauri::command]
+pub fn list_agent_history(workspace_path: String, agent_kinds: Vec<String>) -> Result<Vec<AgentHistoryEntry>, AppError> {
+    let mut history = Vec::new();
+    let wants_codex = agent_kinds.iter().any(|kind| kind.eq_ignore_ascii_case("codex"));
+    let wants_claude = agent_kinds.iter().any(|kind| kind.eq_ignore_ascii_case("claude"));
+
+    if wants_codex {
+        history.extend(load_codex_history(&workspace_path)?);
+    }
+    if wants_claude {
+        history.extend(load_claude_history(&workspace_path)?);
+    }
+
+    history.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+    Ok(history)
 }
 
 #[tauri::command]

@@ -1,19 +1,21 @@
 import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
-import { Terminal, type ITerminalOptions } from "xterm";
+import { Terminal, type ITerminalOptions } from "@xterm/xterm";
 
 interface UseXtermOptions {
   options?: ITerminalOptions;
   onData?: (data: string) => void;
   onResize?: (cols: number, rows: number) => void;
+  multilineEnter?: "default" | "line-feed";
 }
 
-export function useXterm({ options, onData, onResize }: UseXtermOptions) {
+export function useXterm({ options, onData, onResize, multilineEnter = "default" }: UseXtermOptions) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const onDataRef = useRef(onData);
   const onResizeRef = useRef(onResize);
+  const multilineEnterRef = useRef(multilineEnter);
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null);
   const rafRef = useRef<number | null>(null);
 
@@ -24,6 +26,10 @@ export function useXterm({ options, onData, onResize }: UseXtermOptions) {
   useEffect(() => {
     onResizeRef.current = onResize;
   }, [onResize]);
+
+  useEffect(() => {
+    multilineEnterRef.current = multilineEnter;
+  }, [multilineEnter]);
 
   useEffect(() => {
     if (!containerRef.current || terminalRef.current) {
@@ -67,17 +73,69 @@ export function useXterm({ options, onData, onResize }: UseXtermOptions) {
     terminal.open(container);
     fitAddon.fit();
     terminal.focus();
-    terminal.attachCustomKeyEventHandler((event) => {
-      const isCopyShortcut =
-        (event.ctrlKey || event.metaKey) &&
-        !event.altKey &&
-        event.key.toLowerCase() === "c";
 
-      if (event.type === "keydown" && isCopyShortcut && terminal.hasSelection()) {
-        const selection = terminal.getSelection();
-        if (selection) {
-          void navigator.clipboard?.writeText(selection).catch(() => undefined);
-        }
+    const writeSelectionToClipboard = async () => {
+      const selection = terminal.getSelection();
+      if (!selection || !navigator.clipboard?.writeText) {
+        return false;
+      }
+
+      try {
+        await navigator.clipboard.writeText(selection);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const pasteClipboardIntoTerminal = async () => {
+      if (!navigator.clipboard?.readText) {
+        return;
+      }
+
+      try {
+        const clipboardText = await navigator.clipboard.readText();
+        terminal.paste(clipboardText);
+        terminal.focus();
+      } catch {
+        // Keep the event swallowed; if clipboard access is denied the user can still use context menu paste.
+      }
+    };
+
+    terminal.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") {
+        return true;
+      }
+
+      const normalizedKey = event.key.toLowerCase();
+      const hasPrimaryModifier = event.ctrlKey || event.metaKey;
+      const isCopyShortcut = hasPrimaryModifier && !event.altKey && normalizedKey === "c";
+      const isPasteShortcut = hasPrimaryModifier && !event.altKey && normalizedKey === "v";
+      const isCtrlInsertCopy = event.ctrlKey && !event.altKey && !event.metaKey && event.key === "Insert";
+      const isShiftInsertPaste =
+        event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && event.key === "Insert";
+      const isShiftEnterLineFeed =
+        multilineEnterRef.current === "line-feed" &&
+        event.key === "Enter" &&
+        event.shiftKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey;
+
+      if (isShiftEnterLineFeed) {
+        onDataRef.current?.("\n");
+        event.preventDefault();
+        return false;
+      }
+
+      if ((isCopyShortcut || isCtrlInsertCopy) && terminal.hasSelection()) {
+        void writeSelectionToClipboard();
+        event.preventDefault();
+        return false;
+      }
+
+      if (isPasteShortcut || isShiftInsertPaste) {
+        void pasteClipboardIntoTerminal();
         event.preventDefault();
         return false;
       }

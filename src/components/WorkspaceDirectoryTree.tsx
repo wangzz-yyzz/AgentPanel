@@ -63,6 +63,8 @@ function iconForEntry(entry: DirectoryEntry) {
     case "md":
     case "txt":
       return { closed: FileText, open: FileText, className: "text-[#475569]" };
+    case "pdf":
+      return { closed: FileText, open: FileText, className: "text-[#dc2626]" };
     case "png":
     case "jpg":
     case "jpeg":
@@ -393,7 +395,7 @@ export function WorkspaceDirectoryTree() {
           {rootPath || "No workspace path"}
         </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      <div className="terminal-scrollbar min-h-0 flex-1 overflow-y-auto pr-1">
         {!rootPath ? (
           <div className="rounded-[22px] border border-dashed border-slate-200 bg-white/75 px-4 py-5 text-sm text-slate-500">
             Select a workspace to inspect its files.

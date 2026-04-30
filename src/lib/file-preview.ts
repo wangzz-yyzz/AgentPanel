@@ -1,4 +1,4 @@
-export type FilePreviewKind = "markdown" | "text" | "image" | "pdf";
+export type FilePreviewKind = "markdown" | "text" | "image" | "pdf" | "docx" | "spreadsheet" | "presentation" | "media";
 
 const markdownExtensions = new Set([
   "md",
@@ -24,6 +24,27 @@ const imageExtensions = new Set([
 ]);
 
 const pdfExtensions = new Set(["pdf"]);
+
+const docxExtensions = new Set(["docx"]);
+
+const spreadsheetExtensions = new Set(["xlsx", "csv", "tsv"]);
+
+const presentationExtensions = new Set(["pptx"]);
+
+const mediaExtensions = new Set([
+  "mp3",
+  "wav",
+  "ogg",
+  "oga",
+  "m4a",
+  "aac",
+  "flac",
+  "mp4",
+  "webm",
+  "mov",
+  "m4v",
+  "ogv"
+]);
 
 const textExtensions = new Set([
   "txt",
@@ -283,6 +304,22 @@ export function isPdfPreviewPath(path: string) {
   return pdfExtensions.has(fileExtensionFromPath(path));
 }
 
+export function isDocxPreviewPath(path: string) {
+  return docxExtensions.has(fileExtensionFromPath(path));
+}
+
+export function isSpreadsheetPreviewPath(path: string) {
+  return spreadsheetExtensions.has(fileExtensionFromPath(path));
+}
+
+export function isPresentationPreviewPath(path: string) {
+  return presentationExtensions.has(fileExtensionFromPath(path));
+}
+
+export function isMediaPreviewPath(path: string) {
+  return mediaExtensions.has(fileExtensionFromPath(path));
+}
+
 export function isTextPreviewPath(path: string) {
   const extension = fileExtensionFromPath(path);
   if (textExtensions.has(extension)) {
@@ -310,6 +347,18 @@ export function previewKindForPath(path: string): FilePreviewKind | undefined {
   }
   if (isPdfPreviewPath(path)) {
     return "pdf";
+  }
+  if (isDocxPreviewPath(path)) {
+    return "docx";
+  }
+  if (isSpreadsheetPreviewPath(path)) {
+    return "spreadsheet";
+  }
+  if (isPresentationPreviewPath(path)) {
+    return "presentation";
+  }
+  if (isMediaPreviewPath(path)) {
+    return "media";
   }
   if (isTextPreviewPath(path)) {
     return "text";

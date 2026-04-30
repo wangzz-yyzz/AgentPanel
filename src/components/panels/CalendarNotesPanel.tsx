@@ -335,7 +335,7 @@ export function CalendarNotesPanel({ panel, onPatch }: CalendarNotesPanelProps) 
               />
             </>
           ) : (
-            <div className="min-h-[220px] flex-1 overflow-y-auto rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4">
+            <div className="terminal-scrollbar min-h-[220px] flex-1 overflow-y-auto rounded-[24px] border border-slate-200 bg-slate-50/80 px-4 py-4">
               <MarkdownDocument markdown={draftContent} />
             </div>
           )}
@@ -464,7 +464,7 @@ export function CalendarNotesPanel({ panel, onPatch }: CalendarNotesPanelProps) 
             <FileText className="h-4 w-4 text-[#ff7a18]" />
             Saved notes
           </div>
-          <div className="space-y-2 overflow-y-auto pr-1">
+          <div className="terminal-scrollbar space-y-2 overflow-y-auto pr-1">
             {sortedNotes.length === 0 ? (
               <div className="rounded-[18px] border border-dashed border-slate-200 bg-white/80 px-4 py-4 text-sm text-slate-500">
                 No notes yet. Pick a day in the calendar view and save one.

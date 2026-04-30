@@ -221,7 +221,7 @@ export function ProfileManager() {
           <div className="mb-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{profileError}</div>
         ) : null}
 
-        <div className="grid max-h-[420px] gap-3 overflow-auto pr-1">
+        <div className="terminal-scrollbar grid max-h-[420px] gap-3 overflow-auto pr-1">
           {loadingProfiles ? <div className="rounded-3xl border border-dashed border-slate-200 px-4 py-5 text-sm text-slate-500">Loading profiles...</div> : null}
           {!loadingProfiles &&
             profiles.map((profile) => (

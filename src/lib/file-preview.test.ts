@@ -2,9 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   fileBaseNameFromPath,
   fileExtensionFromPath,
+  isDocxPreviewPath,
   isImagePreviewPath,
   isMarkdownPreviewPath,
+  isMediaPreviewPath,
   isPdfPreviewPath,
+  isPresentationPreviewPath,
+  isSpreadsheetPreviewPath,
   isTextPreviewPath,
   previewKindForPath
 } from "./file-preview";
@@ -31,6 +35,19 @@ describe("file preview classification", () => {
     expect(previewKindForPath("docs/report.pdf")).toBe("pdf");
   });
 
+  it("detects docx, spreadsheet, presentation, and media files", () => {
+    expect(isDocxPreviewPath("docs/brief.docx")).toBe(true);
+    expect(isSpreadsheetPreviewPath("data/model.xlsx")).toBe(true);
+    expect(isSpreadsheetPreviewPath("data/export.csv")).toBe(true);
+    expect(isPresentationPreviewPath("slides/demo.pptx")).toBe(true);
+    expect(isMediaPreviewPath("media/demo.mp4")).toBe(true);
+    expect(isMediaPreviewPath("media/voice.mp3")).toBe(true);
+    expect(previewKindForPath("docs/brief.docx")).toBe("docx");
+    expect(previewKindForPath("data/model.xlsx")).toBe("spreadsheet");
+    expect(previewKindForPath("slides/demo.pptx")).toBe("presentation");
+    expect(previewKindForPath("media/demo.mp4")).toBe("media");
+  });
+
   it("detects code, config, shell, and extensionless text files", () => {
     expect(isTextPreviewPath("src/main.tsx")).toBe(true);
     expect(isTextPreviewPath("backend/service.rs")).toBe(true);
@@ -49,7 +66,7 @@ describe("file preview classification", () => {
   it("does not classify unsupported binaries as previewable text", () => {
     expect(previewKindForPath("archive/build.zip")).toBeUndefined();
     expect(previewKindForPath("bin/app.exe")).toBeUndefined();
-    expect(previewKindForPath("media/movie.mp4")).toBeUndefined();
+    expect(previewKindForPath("archive/data.7z")).toBeUndefined();
   });
 
   it("normalizes basename and extension parsing", () => {

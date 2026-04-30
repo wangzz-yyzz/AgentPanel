@@ -7,23 +7,35 @@ import {
   loadSupportPanelsState,
   saveSupportPanelsState,
   syncGlobalBuiltinPanels,
-  toRegistryEntry,
   upsertWorkspaceSupportPanels
 } from "../lib/support-panels";
 import { fileExtensionFromPath, previewKindForPath, type FilePreviewKind } from "../lib/file-preview";
-import { createSession, killSession, loadProfiles, readFileAsDataUrl, readTextFile, readTextPreviewFile, restartSession, saveProfiles, writeTextFile } from "../lib/tauri";
+import {
+  createSession,
+  killSession,
+  listAgentHistory,
+  loadProfiles,
+  readFileAsDataUrl,
+  readBinaryFile,
+  readDocxPreview,
+  readPresentationPreview,
+  readSpreadsheetPreview,
+  readTextFile,
+  readTextPreviewFile,
+  restartSession,
+  saveProfiles,
+  writeTextFile
+} from "../lib/tauri";
 import { isBuiltinProfile } from "../types/agent";
 import type {
   BuiltinSupportPanelKind,
-  CustomPanelRecord,
-  SupportPanelRegistryFile,
   SupportPanelsState,
   WorkspaceConfigBundleFile,
   WorkspaceConfigExport,
   WorkspaceSupportPanels
 } from "../types/support-panel";
 import type { AgentProfile, AgentProfileDraft, WorkspaceDraft, WorkspaceSummary } from "../types/agent";
-import type { CreateSessionInput, SessionExitPayload, SessionOutputPayload, SessionRecord } from "../types/terminal";
+import type { AgentHistoryEntry, CreateSessionInput, SessionExitPayload, SessionOutputPayload, SessionRecord } from "../types/terminal";
 
 export type FilePreviewState = {
   path: string;
@@ -32,6 +44,23 @@ export type FilePreviewState = {
   status: "loading" | "ready" | "error";
   content?: string;
   dataUrl?: string;
+  sourceUrl?: string;
+  html?: string;
+  table?: {
+    columns: string[];
+    rows: string[][];
+    sheetName?: string;
+    sheetNames?: string[];
+    totalRows?: number;
+    totalColumns?: number;
+  };
+  slides?: Array<{
+    index: number;
+    title: string;
+    bullets: string[];
+    notes?: string;
+  }>;
+  mediaMimeType?: string;
   error?: string;
 };
 
@@ -44,6 +73,7 @@ type AppState = {
   workspaces: WorkspaceSummary[];
   profiles: AgentProfile[];
   sessions: SessionRecord[];
+  agentHistoryByWorkspace: Record<string, AgentHistoryEntry[]>;
   activeWorkspaceId: string;
   activeSessionId?: string;
   supportPanels: SupportPanelsState;
@@ -52,6 +82,7 @@ type AppState = {
   loadingProfiles: boolean;
   profileError?: string;
   initialize: () => Promise<void>;
+  refreshAgentHistory: (workspaceId: string) => Promise<void>;
   setActiveWorkspace: (workspaceId: string) => void;
   ensureWorkspacePanels: (workspaceId: string) => void;
   saveWorkspace: (draft: WorkspaceDraft) => WorkspaceSummary;
@@ -68,12 +99,6 @@ type AppState = {
   relaunchSession: (sessionId: string) => Promise<void>;
   saveUserProfile: (draft: AgentProfileDraft) => Promise<AgentProfile>;
   updateBuiltinPanel: (workspaceId: string, kind: BuiltinSupportPanelKind, patch: Partial<WorkspaceSupportPanels["builtinPanels"][BuiltinSupportPanelKind]>) => void;
-  updateRegistryPath: (workspaceId: string, registryPath: string) => void;
-  createCustomPanel: (workspaceId: string, input?: { title?: string; description?: string; content?: string }) => string;
-  updateCustomPanel: (workspaceId: string, panelId: string, patch: Partial<Pick<CustomPanelRecord, "title" | "description" | "content">>) => void;
-  removeCustomPanel: (workspaceId: string, panelId: string) => void;
-  exportCustomPanels: (workspaceId: string) => Promise<string>;
-  importCustomPanels: (workspaceId: string) => Promise<void>;
   requestFilePreview: (path: string, title?: string) => Promise<void>;
   closeFilePreview: () => void;
   showNotification: (message: string) => void;
@@ -149,6 +174,20 @@ function previewLabelForKind(kind: FilePreviewKind) {
       return "Image";
     case "pdf":
       return "PDF";
+    case "docx":
+      return "DOCX";
+    case "spreadsheet":
+      return "Spreadsheet";
+    case "presentation":
+      return "Presentation";
+    case "media":
+      return "Media";
+  }
+}
+
+function revokePreviewObjectUrl(preview?: FilePreviewState) {
+  if (preview?.sourceUrl?.startsWith("blob:")) {
+    URL.revokeObjectURL(preview.sourceUrl);
   }
 }
 
@@ -352,12 +391,54 @@ function shouldAutoCloseOnExit(session: SessionRecord): boolean {
   return session.profile.id === "codex" || session.profile.id === "claude";
 }
 
+function shouldRefreshHistoryOnExit(session: Pick<SessionRecord, "profile">): boolean {
+  return session.profile.id === "codex" || session.profile.id === "claude";
+}
+
+function scheduleWorkspaceHistoryRefresh(workspaceId: string, refreshAgentHistory: (workspaceId: string) => Promise<void>) {
+  globalThis.setTimeout(() => {
+    void refreshAgentHistory(workspaceId);
+  }, 180);
+}
+
 function resolveWorkspaceCwd(workspaces: WorkspaceSummary[], workspaceId: string, cwd?: string): string | undefined {
   if (cwd?.trim()) {
     return cwd;
   }
 
   return workspaces.find((workspace) => workspace.id === workspaceId)?.path;
+}
+
+function builtInAgentKindsForWorkspace(workspace: WorkspaceSummary | undefined, profiles: AgentProfile[]) {
+  if (!workspace) {
+    return [] as Array<"claude" | "codex">;
+  }
+
+  const enabledProfileIds = new Set(workspace.profileIds);
+  return profiles
+    .filter((profile) => enabledProfileIds.has(profile.id))
+    .flatMap((profile) => {
+      if (profile.id === "claude") {
+        return ["claude"] as const;
+      }
+      if (profile.id === "codex") {
+        return ["codex"] as const;
+      }
+      return [];
+    });
+}
+
+function sortAgentHistory(entries: AgentHistoryEntry[]) {
+  return [...entries].sort((left, right) => {
+    const rightNumeric = Number(right.updatedAt);
+    const leftNumeric = Number(left.updatedAt);
+    const rightTime = Number.isFinite(rightNumeric) ? rightNumeric : Date.parse(right.updatedAt);
+    const leftTime = Number.isFinite(leftNumeric) ? leftNumeric : Date.parse(left.updatedAt);
+    if (!Number.isNaN(rightTime) && !Number.isNaN(leftTime) && rightTime !== leftTime) {
+      return rightTime - leftTime;
+    }
+    return right.updatedAt.localeCompare(left.updatedAt);
+  });
 }
 
 function removeWorkspaceSupportPanels(supportPanels: SupportPanelsState, workspaceId: string): SupportPanelsState {
@@ -461,9 +542,6 @@ function validateWorkspaceConfig(workspace: unknown, index: number): asserts wor
   if (!isRecord(workspace.panels)) {
     throw new Error(`Workspace "${workspace.id}" is missing panel configuration.`);
   }
-  if (typeof workspace.panels.registryPath !== "string") {
-    throw new Error(`Workspace "${workspace.id}" has an invalid registryPath.`);
-  }
   if (!isRecord(workspace.panels.builtinPanels)) {
     throw new Error(`Workspace "${workspace.id}" is missing builtin panel data.`);
   }
@@ -472,22 +550,6 @@ function validateWorkspaceConfig(workspace: unknown, index: number): asserts wor
     if (!isBuiltinPanelExport(kind, workspace.panels.builtinPanels[kind])) {
       throw new Error(`Workspace "${workspace.id}" has invalid "${kind}" panel data.`);
     }
-  }
-
-  if (
-    !Array.isArray(workspace.panels.customPanels) ||
-    workspace.panels.customPanels.some(
-      (panel) =>
-        !isRecord(panel) ||
-        typeof panel.id !== "string" ||
-        typeof panel.title !== "string" ||
-        typeof panel.description !== "string" ||
-        typeof panel.content !== "string" ||
-        typeof panel.createdAt !== "string" ||
-        typeof panel.updatedAt !== "string"
-    )
-  ) {
-    throw new Error(`Workspace "${workspace.id}" has invalid custom panel data.`);
   }
 }
 
@@ -530,52 +592,38 @@ function exportWorkspaceConfig(
     path: workspace.path,
     profileIds: workspace.profileIds,
     panels: {
-      registryPath: workspacePanels.registryPath,
-        builtinPanels: {
-          todo: {
-            title: workspacePanels.builtinPanels.todo.title,
-            description: workspacePanels.builtinPanels.todo.description,
-            content: workspacePanels.builtinPanels.todo.content,
-            data: workspacePanels.builtinPanels.todo.data
-          },
-          calendar: {
-            title: workspacePanels.builtinPanels.calendar.title,
-            description: workspacePanels.builtinPanels.calendar.description,
-            content: workspacePanels.builtinPanels.calendar.content,
-            data: workspacePanels.builtinPanels.calendar.data
-          },
-          skills: {
-            title: workspacePanels.builtinPanels.skills.title,
-            description: workspacePanels.builtinPanels.skills.description,
-            content: workspacePanels.builtinPanels.skills.content,
-            data: workspacePanels.builtinPanels.skills.data
-          },
-          knowledge: {
-            title: workspacePanels.builtinPanels.knowledge.title,
-            description: workspacePanels.builtinPanels.knowledge.description,
-            content: workspacePanels.builtinPanels.knowledge.content,
-            data: workspacePanels.builtinPanels.knowledge.data
-          }
+      builtinPanels: {
+        todo: {
+          title: workspacePanels.builtinPanels.todo.title,
+          description: workspacePanels.builtinPanels.todo.description,
+          content: workspacePanels.builtinPanels.todo.content,
+          data: workspacePanels.builtinPanels.todo.data
         },
-        customPanels: workspacePanels.customPanels.map((panel) => ({
-        id: panel.id,
-        title: panel.title,
-        description: panel.description,
-        content: panel.content,
-        createdAt: panel.createdAt,
-        updatedAt: panel.updatedAt
-      }))
+        calendar: {
+          title: workspacePanels.builtinPanels.calendar.title,
+          description: workspacePanels.builtinPanels.calendar.description,
+          content: workspacePanels.builtinPanels.calendar.content,
+          data: workspacePanels.builtinPanels.calendar.data
+        },
+        skills: {
+          title: workspacePanels.builtinPanels.skills.title,
+          description: workspacePanels.builtinPanels.skills.description,
+          content: workspacePanels.builtinPanels.skills.content,
+          data: workspacePanels.builtinPanels.skills.data
+        },
+        knowledge: {
+          title: workspacePanels.builtinPanels.knowledge.title,
+          description: workspacePanels.builtinPanels.knowledge.description,
+          content: workspacePanels.builtinPanels.knowledge.content,
+          data: workspacePanels.builtinPanels.knowledge.data
+        }
+      }
     }
   };
 }
 
 function importWorkspacePanels(config: WorkspaceConfigExport): WorkspaceSupportPanels {
   const base = createDefaultWorkspaceSupportPanels(config.id);
-  const customPanels: CustomPanelRecord[] = (config.panels.customPanels ?? []).map((panel) => ({
-    ...panel,
-    kind: "custom",
-    workspaceId: config.id
-  }));
 
   return {
     builtinPanels: {
@@ -599,10 +647,7 @@ function importWorkspacePanels(config: WorkspaceConfigExport): WorkspaceSupportP
         ...config.panels.builtinPanels.knowledge,
         data: config.panels.builtinPanels.knowledge.data ?? base.builtinPanels.knowledge.data
       }
-    },
-    customPanels,
-    registry: customPanels.map(toRegistryEntry),
-    registryPath: config.panels.registryPath || base.registryPath
+    }
   };
 }
 
@@ -633,6 +678,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   workspaces: initialWorkspaces,
   profiles: sortProfiles(fallbackProfiles),
   sessions: [],
+  agentHistoryByWorkspace: {},
   activeWorkspaceId: initialActiveWorkspaceId,
   supportPanels: initialSupportPanels,
   filePreview: undefined,
@@ -653,12 +699,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loadingProfiles: true, profileError: undefined });
     try {
       const profiles = await loadProfiles();
+      const nextProfiles = sortProfiles(profiles.length ? profiles : fallbackProfiles);
       set({
-        profiles: sortProfiles(profiles.length ? profiles : fallbackProfiles),
+        profiles: nextProfiles,
         supportPanels: syncedSupportPanels,
         activeWorkspaceId,
         loadingProfiles: false
       });
+      await Promise.all(currentWorkspaces.map((workspace) => get().refreshAgentHistory(workspace.id)));
     } catch (error) {
       set({
         profiles: sortProfiles(fallbackProfiles),
@@ -667,11 +715,54 @@ export const useAppStore = create<AppState>((set, get) => ({
         loadingProfiles: false,
         profileError: error instanceof Error ? error.message : "Unable to load profiles"
       });
+      await Promise.all(currentWorkspaces.map((workspace) => get().refreshAgentHistory(workspace.id)));
+    }
+  },
+  async refreshAgentHistory(workspaceId) {
+    const state = get();
+    const workspace = state.workspaces.find((item) => item.id === workspaceId);
+    if (!workspace?.path.trim()) {
+      set((current) => ({
+        agentHistoryByWorkspace: {
+          ...current.agentHistoryByWorkspace,
+          [workspaceId]: []
+        }
+      }));
+      return;
+    }
+
+    const agentKinds = builtInAgentKindsForWorkspace(workspace, state.profiles);
+    if (agentKinds.length === 0) {
+      set((current) => ({
+        agentHistoryByWorkspace: {
+          ...current.agentHistoryByWorkspace,
+          [workspaceId]: []
+        }
+      }));
+      return;
+    }
+
+    try {
+      const history = await listAgentHistory(workspace.path, agentKinds);
+      set((current) => ({
+        agentHistoryByWorkspace: {
+          ...current.agentHistoryByWorkspace,
+          [workspaceId]: sortAgentHistory(history)
+        }
+      }));
+    } catch {
+      set((current) => ({
+        agentHistoryByWorkspace: {
+          ...current.agentHistoryByWorkspace,
+          [workspaceId]: []
+        }
+      }));
     }
   },
   setActiveWorkspace(workspaceId) {
     get().ensureWorkspacePanels(workspaceId);
     set({ activeWorkspaceId: workspaceId });
+    void get().refreshAgentHistory(workspaceId);
   },
   ensureWorkspacePanels(workspaceId) {
     const current = get().supportPanels[workspaceId];
@@ -723,6 +814,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         : currentSupportPanels;
     saveSupportPanelsState(nextSupportPanels);
     set({ workspaces: nextWorkspaces, activeWorkspaceId: workspace.id, supportPanels: nextSupportPanels });
+    void get().refreshAgentHistory(workspace.id);
     return workspace;
   },
   async deleteWorkspace(workspaceId) {
@@ -750,6 +842,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       : false;
     const activeSessionId = activeSessionStillExists ? state.activeSessionId : sessions[0]?.id;
     const supportPanels = removeWorkspaceSupportPanels(state.supportPanels, workspaceId);
+    const agentHistoryByWorkspace = { ...state.agentHistoryByWorkspace };
+    delete agentHistoryByWorkspace[workspaceId];
 
     saveWorkspaceOverrides(workspaces);
     saveSupportPanelsState(supportPanels);
@@ -759,7 +853,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       sessions,
       activeWorkspaceId,
       activeSessionId,
-      supportPanels
+      supportPanels,
+      agentHistoryByWorkspace
     });
   },
   async exportWorkspaceBundle(path) {
@@ -808,8 +903,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       supportPanels: syncedSupportPanels,
       activeWorkspaceId: workspaces[0].id,
       sessions: [],
-      activeSessionId: undefined
+      activeSessionId: undefined,
+      agentHistoryByWorkspace: {}
     });
+    await Promise.all(workspaces.map((workspace) => get().refreshAgentHistory(workspace.id)));
   },
   toggleWorkspaceProfile(workspaceId, profileId) {
     const workspaces = get().workspaces.map((workspace) => {
@@ -845,12 +942,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   markExited(payload) {
-    set((state) => {
-      const session = state.sessions.find((item) => item.backendSessionId === payload.sessionId);
-      if (!session) {
-        return state;
-      }
+    const session = get().sessions.find((item) => item.backendSessionId === payload.sessionId);
+    if (!session) {
+      return;
+    }
 
+    set((state) => {
       if (shouldAutoCloseOnExit(session)) {
         return removeSessionState(state, session.id);
       }
@@ -865,6 +962,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeSessionId: state.activeSessionId
       };
     });
+
+    if (shouldRefreshHistoryOnExit(session)) {
+      scheduleWorkspaceHistoryRefresh(session.workspaceId, get().refreshAgentHistory);
+    }
   },
   syncSessionSize(sessionId, cols, rows) {
     set((state) => ({
@@ -937,6 +1038,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     try {
       await killSession(session.backendSessionId);
       set((state) => removeSessionState(state, sessionId));
+      if (shouldRefreshHistoryOnExit(session)) {
+        scheduleWorkspaceHistoryRefresh(session.workspaceId, get().refreshAgentHistory);
+      }
     } catch (error) {
       set((state) => ({
         sessions: updateSessionById(state.sessions, sessionId, (item) => ({
@@ -1022,6 +1126,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const nextProfiles = sortProfiles(profiles);
     await saveProfiles(nextProfiles);
     set({ profiles: nextProfiles });
+    await Promise.all(get().workspaces.map((workspace) => get().refreshAgentHistory(workspace.id)));
     return profile;
   },
   updateBuiltinPanel(workspaceId, kind, patch) {
@@ -1054,104 +1159,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     saveSupportPanelsState(nextState);
     set({ supportPanels: nextState as SupportPanelsState });
   },
-  updateRegistryPath(workspaceId, registryPath) {
-    const nextState = upsertWorkspaceSupportPanels(get().supportPanels, workspaceId, (workspacePanels) => ({
-      ...workspacePanels,
-      registryPath
-    }));
-    saveSupportPanelsState(nextState);
-    set({ supportPanels: nextState });
-  },
-  createCustomPanel(workspaceId, input) {
-    const timestamp = new Date().toISOString();
-    const panel: CustomPanelRecord = {
-      id: crypto.randomUUID(),
-      kind: "custom",
-      title: input?.title?.trim() || "Custom Panel",
-      description: input?.description?.trim() || "MVP registry entry for workspace-specific tools or notes.",
-      content: input?.content ?? "",
-      workspaceId,
-      createdAt: timestamp,
-      updatedAt: timestamp
-    };
-
-    const nextState = upsertWorkspaceSupportPanels(get().supportPanels, workspaceId, (workspacePanels) => ({
-      ...workspacePanels,
-      customPanels: [...workspacePanels.customPanels, panel],
-      registry: [...workspacePanels.registry, toRegistryEntry(panel)]
-    }));
-
-    saveSupportPanelsState(nextState);
-    set({ supportPanels: nextState });
-    return panel.id;
-  },
-  updateCustomPanel(workspaceId, panelId, patch) {
-    const nextState = upsertWorkspaceSupportPanels(get().supportPanels, workspaceId, (workspacePanels) => {
-      const customPanels = workspacePanels.customPanels.map((panel) => {
-        if (panel.id !== panelId) {
-          return panel;
-        }
-
-        return {
-          ...panel,
-          ...patch,
-          updatedAt: new Date().toISOString()
-        };
-      });
-
-      const registry = customPanels.map(toRegistryEntry);
-
-      return {
-        ...workspacePanels,
-        customPanels,
-        registry
-      };
-    });
-
-    saveSupportPanelsState(nextState);
-    set({ supportPanels: nextState });
-  },
-  removeCustomPanel(workspaceId, panelId) {
-    const nextState = upsertWorkspaceSupportPanels(get().supportPanels, workspaceId, (workspacePanels) => {
-      const customPanels = workspacePanels.customPanels.filter((panel) => panel.id !== panelId);
-      return {
-        ...workspacePanels,
-        customPanels,
-        registry: customPanels.map(toRegistryEntry)
-      };
-    });
-
-    saveSupportPanelsState(nextState);
-    set({ supportPanels: nextState });
-  },
-  async exportCustomPanels(workspaceId) {
-    const workspacePanels = get().supportPanels[workspaceId] ?? createDefaultWorkspaceSupportPanels(workspaceId);
-    const payload: SupportPanelRegistryFile = {
-      version: 1,
-      workspaceId,
-      exportedAt: new Date().toISOString(),
-      registryPath: workspacePanels.registryPath,
-      customPanels: workspacePanels.customPanels,
-      registry: workspacePanels.registry
-    };
-
-    await writeTextFile(workspacePanels.registryPath, `${JSON.stringify(payload, null, 2)}\n`);
-    return workspacePanels.registryPath;
-  },
-  async importCustomPanels(workspaceId) {
-    const workspacePanels = get().supportPanels[workspaceId] ?? createDefaultWorkspaceSupportPanels(workspaceId);
-    const raw = await readTextFile(workspacePanels.registryPath);
-    const payload = JSON.parse(raw) as SupportPanelRegistryFile;
-    const customPanels = Array.isArray(payload.customPanels) ? payload.customPanels : [];
-    const nextState = upsertWorkspaceSupportPanels(get().supportPanels, workspaceId, (current) => ({
-      ...current,
-      registryPath: payload.registryPath || current.registryPath,
-      customPanels,
-      registry: customPanels.map(toRegistryEntry)
-    }));
-    saveSupportPanelsState(nextState);
-    set({ supportPanels: nextState });
-  },
   async requestFilePreview(path, title) {
     const kind = previewKindForPath(path);
     if (!kind) {
@@ -1163,6 +1170,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
 
     const nextTitle = title?.trim() || fileNameFromPath(path);
+    revokePreviewObjectUrl(get().filePreview);
     set({
       filePreview: {
         path,
@@ -1173,7 +1181,59 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
 
     try {
-      if (kind === "image" || kind === "pdf") {
+      if (kind === "pdf") {
+        const bytes = await readBinaryFile(path);
+        const sourceUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: "application/pdf" }));
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  sourceUrl
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "media") {
+        const extension = fileExtensionFromPath(path);
+        const mimeType =
+          extension === "mp3" ? "audio/mpeg" :
+          extension === "wav" ? "audio/wav" :
+          extension === "ogg" || extension === "oga" ? "audio/ogg" :
+          extension === "m4a" ? "audio/mp4" :
+          extension === "aac" ? "audio/aac" :
+          extension === "flac" ? "audio/flac" :
+          extension === "mp4" || extension === "m4v" ? "video/mp4" :
+          extension === "webm" ? "video/webm" :
+          extension === "mov" ? "video/quicktime" :
+          extension === "ogv" ? "video/ogg" :
+          "application/octet-stream";
+        const bytes = await readBinaryFile(path);
+        const sourceUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeType }));
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  sourceUrl,
+                  mediaMimeType: mimeType
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "image") {
         const dataUrl = await readFileAsDataUrl(path);
         set((state) =>
           state.filePreview?.path === path
@@ -1184,6 +1244,72 @@ export const useAppStore = create<AppState>((set, get) => ({
                   kind,
                   status: "ready",
                   dataUrl
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "docx") {
+        const html = await readDocxPreview(path);
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  html
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "spreadsheet") {
+        const table = await readSpreadsheetPreview(path);
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  table: {
+                    columns: table.columns,
+                    rows: table.rows,
+                    sheetName: table.sheetName,
+                    sheetNames: table.sheetNames,
+                    totalRows: table.totalRows,
+                    totalColumns: table.totalColumns
+                  }
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "presentation") {
+        const slides = await readPresentationPreview(path);
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  slides: slides.map((slide) => ({
+                    index: slide.index,
+                    title: slide.title,
+                    bullets: slide.bullets,
+                    notes: slide.notes ?? undefined
+                  }))
                 }
               }
             : state
@@ -1223,6 +1349,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   closeFilePreview() {
+    revokePreviewObjectUrl(get().filePreview);
     set({ filePreview: undefined });
   },
   showNotification(message) {
