@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   fileBaseNameFromPath,
   fileExtensionFromPath,
+  isArchivePreviewPath,
   isDocxPreviewPath,
   isImagePreviewPath,
   isMarkdownPreviewPath,
@@ -48,6 +49,15 @@ describe("file preview classification", () => {
     expect(previewKindForPath("media/demo.mp4")).toBe("media");
   });
 
+  it("detects archive files", () => {
+    expect(isArchivePreviewPath("archive/build.zip")).toBe(true);
+    expect(isArchivePreviewPath("archive/releases.tar")).toBe(true);
+    expect(isArchivePreviewPath("archive/releases.tar.gz")).toBe(true);
+    expect(isArchivePreviewPath("archive/releases.tgz")).toBe(true);
+    expect(isArchivePreviewPath("archive/data.7z")).toBe(true);
+    expect(previewKindForPath("archive/build.zip")).toBe("archive");
+  });
+
   it("detects code, config, shell, and extensionless text files", () => {
     expect(isTextPreviewPath("src/main.tsx")).toBe(true);
     expect(isTextPreviewPath("backend/service.rs")).toBe(true);
@@ -64,9 +74,8 @@ describe("file preview classification", () => {
   });
 
   it("does not classify unsupported binaries as previewable text", () => {
-    expect(previewKindForPath("archive/build.zip")).toBeUndefined();
     expect(previewKindForPath("bin/app.exe")).toBeUndefined();
-    expect(previewKindForPath("archive/data.7z")).toBeUndefined();
+    expect(previewKindForPath("archive/data.iso")).toBeUndefined();
   });
 
   it("normalizes basename and extension parsing", () => {

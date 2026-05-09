@@ -1,4 +1,4 @@
-export type FilePreviewKind = "markdown" | "text" | "image" | "pdf" | "docx" | "spreadsheet" | "presentation" | "media";
+export type FilePreviewKind = "markdown" | "text" | "image" | "pdf" | "docx" | "spreadsheet" | "presentation" | "media" | "archive";
 
 const markdownExtensions = new Set([
   "md",
@@ -44,6 +44,15 @@ const mediaExtensions = new Set([
   "mov",
   "m4v",
   "ogv"
+]);
+
+const archiveExtensions = new Set([
+  "zip",
+  "tar",
+  "gz",
+  "tgz",
+  "7z",
+  "rar"
 ]);
 
 const textExtensions = new Set([
@@ -320,6 +329,15 @@ export function isMediaPreviewPath(path: string) {
   return mediaExtensions.has(fileExtensionFromPath(path));
 }
 
+export function isArchivePreviewPath(path: string) {
+  const extension = fileExtensionFromPath(path);
+  if (archiveExtensions.has(extension)) {
+    return true;
+  }
+
+  return normalizePath(path).endsWith(".tar.gz");
+}
+
 export function isTextPreviewPath(path: string) {
   const extension = fileExtensionFromPath(path);
   if (textExtensions.has(extension)) {
@@ -359,6 +377,9 @@ export function previewKindForPath(path: string): FilePreviewKind | undefined {
   }
   if (isMediaPreviewPath(path)) {
     return "media";
+  }
+  if (isArchivePreviewPath(path)) {
+    return "archive";
   }
   if (isTextPreviewPath(path)) {
     return "text";

@@ -50,6 +50,7 @@ pub fn run() {
             commands::read_docx_preview,
             commands::read_spreadsheet_preview,
             commands::read_presentation_preview,
+            commands::read_archive_preview,
             commands::write_text_file,
             commands::list_directory,
             commands::list_markdown_directory,

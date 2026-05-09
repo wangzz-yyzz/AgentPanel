@@ -4,12 +4,14 @@ use std::{
     path::Path,
 };
 
+use encoding_rs::GBK;
 use flate2::read::DeflateDecoder;
 use quick_xml::{events::Event, reader::Reader};
+use tar::Archive;
 
 use crate::{
     error::AppError,
-    models::{PresentationPreviewSlide, SpreadsheetPreviewPayload},
+    models::{ArchivePreviewEntry, ArchivePreviewPayload, PresentationPreviewSlide, SpreadsheetPreviewPayload},
 };
 
 const ZIP_LOCAL_FILE_HEADER: u32 = 0x0403_4b50;
@@ -18,6 +20,7 @@ const ZIP_END_OF_CENTRAL_DIRECTORY: u32 = 0x0605_4b50;
 const MAX_PREVIEW_ROWS: usize = 80;
 const MAX_PREVIEW_COLUMNS: usize = 16;
 const MAX_PRESENTATION_SLIDES: usize = 24;
+const MAX_ARCHIVE_ENTRIES: usize = 400;
 
 #[derive(Debug, Clone)]
 struct ZipEntry {
@@ -26,6 +29,8 @@ struct ZipEntry {
     uncompressed_size: usize,
     compression_method: u16,
 }
+
+const ZIP_GENERAL_PURPOSE_UTF8_FLAG: u16 = 1 << 11;
 
 fn ensure_file_exists(path: &Path) -> Result<(), AppError> {
     if !path.exists() {
@@ -57,6 +62,21 @@ fn parse_u32(slice: &[u8], offset: usize) -> Result<u32, AppError> {
     Ok(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
 }
 
+fn decode_utf8_or_gbk(bytes: &[u8], prefer_utf8: bool) -> String {
+    if prefer_utf8 {
+        if let Ok(value) = String::from_utf8(bytes.to_vec()) {
+            return value;
+        }
+    }
+
+    if let Ok(value) = String::from_utf8(bytes.to_vec()) {
+        return value;
+    }
+
+    let (decoded, _, _) = GBK.decode(bytes);
+    decoded.into_owned()
+}
+
 fn read_zip_entries(bytes: &[u8]) -> Result<HashMap<String, ZipEntry>, AppError> {
     let eocd_index = bytes
         .windows(4)
@@ -77,6 +97,7 @@ fn read_zip_entries(bytes: &[u8]) -> Result<HashMap<String, ZipEntry>, AppError>
             break;
         }
 
+        let general_purpose_flag = parse_u16(central_directory, offset + 8)?;
         let compression_method = parse_u16(central_directory, offset + 10)?;
         let compressed_size = parse_u32(central_directory, offset + 20)? as usize;
         let uncompressed_size = parse_u32(central_directory, offset + 24)? as usize;
@@ -88,7 +109,11 @@ fn read_zip_entries(bytes: &[u8]) -> Result<HashMap<String, ZipEntry>, AppError>
         let file_name_bytes = central_directory
             .get(offset + 46..offset + 46 + file_name_length)
             .ok_or_else(|| AppError::message("Invalid archive entry."))?;
-        let file_name = String::from_utf8_lossy(file_name_bytes).replace('\\', "/");
+        let file_name = decode_utf8_or_gbk(
+            file_name_bytes,
+            (general_purpose_flag & ZIP_GENERAL_PURPOSE_UTF8_FLAG) != 0,
+        )
+        .replace('\\', "/");
 
         let local_header = bytes
             .get(local_header_offset..)
@@ -147,6 +172,175 @@ fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")
+}
+
+fn normalize_archive_entry_path(path: &str) -> String {
+    path.replace('\\', "/")
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .trim()
+        .to_string()
+}
+
+fn normalize_archive_entry_path_bytes(bytes: &[u8]) -> String {
+    normalize_archive_entry_path(&decode_utf8_or_gbk(bytes, false))
+}
+
+fn archive_format_from_path(path: &Path) -> String {
+    let file_name = path
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if file_name.ends_with(".tar.gz") {
+        return "tar.gz".to_string();
+    }
+
+    if file_name.ends_with(".tgz") {
+        return "tgz".to_string();
+    }
+
+    path.extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("archive")
+        .to_ascii_lowercase()
+}
+
+fn compare_archive_entries(left: &ArchivePreviewEntry, right: &ArchivePreviewEntry) -> std::cmp::Ordering {
+    match (left.is_directory, right.is_directory) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => left.path.to_ascii_lowercase().cmp(&right.path.to_ascii_lowercase()),
+    }
+}
+
+fn build_archive_payload(
+    format: &str,
+    entries: Vec<ArchivePreviewEntry>,
+    total_entries: usize,
+) -> ArchivePreviewPayload {
+    ArchivePreviewPayload {
+        format: format.to_string(),
+        truncated: total_entries > entries.len(),
+        total_entries,
+        entries,
+    }
+}
+
+fn read_zip_archive_preview(path: &Path) -> Result<ArchivePreviewPayload, AppError> {
+    let bytes = std::fs::read(path)?;
+    let entries = read_zip_entries(&bytes)?;
+    let total_entries = entries.len();
+    let mut preview_entries = entries
+        .into_iter()
+        .map(|(path, entry)| {
+            let is_directory = path.ends_with('/');
+            ArchivePreviewEntry {
+                path: normalize_archive_entry_path(&path),
+                is_directory,
+                size: if is_directory {
+                    None
+                } else {
+                    Some(entry.uncompressed_size as u64)
+                },
+            }
+        })
+        .filter(|entry| !entry.path.is_empty())
+        .collect::<Vec<_>>();
+
+    preview_entries.sort_by(compare_archive_entries);
+    if preview_entries.len() > MAX_ARCHIVE_ENTRIES {
+        preview_entries.truncate(MAX_ARCHIVE_ENTRIES);
+    }
+
+    Ok(build_archive_payload("zip", preview_entries, total_entries))
+}
+
+fn read_tar_archive_preview<R: Read>(reader: R, format: &str) -> Result<ArchivePreviewPayload, AppError> {
+    let mut archive = Archive::new(reader);
+    let mut preview_entries = Vec::new();
+    let mut total_entries = 0usize;
+
+    for item in archive.entries()? {
+        let entry = item?;
+        let path = normalize_archive_entry_path_bytes(entry.path_bytes().as_ref());
+        if path.is_empty() {
+            continue;
+        }
+
+        total_entries += 1;
+        if preview_entries.len() >= MAX_ARCHIVE_ENTRIES {
+            continue;
+        }
+
+        let entry_type = entry.header().entry_type();
+        preview_entries.push(ArchivePreviewEntry {
+            path,
+            is_directory: entry_type.is_dir(),
+            size: if entry_type.is_dir() {
+                None
+            } else {
+                Some(entry.header().size()?)
+            },
+        });
+    }
+
+    preview_entries.sort_by(compare_archive_entries);
+    Ok(build_archive_payload(format, preview_entries, total_entries))
+}
+
+pub fn read_archive_preview(path: &Path) -> Result<ArchivePreviewPayload, AppError> {
+    ensure_file_exists(path)?;
+    let format = archive_format_from_path(path);
+
+    match format.as_str() {
+        "zip" => read_zip_archive_preview(path),
+        "tar" => {
+            let file = std::fs::File::open(path)?;
+            read_tar_archive_preview(file, "tar")
+        }
+        "tgz" | "tar.gz" => {
+            let file = std::fs::File::open(path)?;
+            let decoder = flate2::read::GzDecoder::new(file);
+            read_tar_archive_preview(decoder, "tar.gz")
+        }
+        "gz" => {
+            let file_name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or("archive.gz");
+            let target_name = file_name.strip_suffix(".gz").unwrap_or(file_name).to_string();
+            let file = std::fs::File::open(path)?;
+            let mut decoder = flate2::read::GzDecoder::new(file);
+            let mut total_size = 0u64;
+            let mut buffer = [0_u8; 8192];
+
+            loop {
+                let read = decoder.read(&mut buffer)?;
+                if read == 0 {
+                    break;
+                }
+                total_size += read as u64;
+            }
+
+            Ok(build_archive_payload(
+                "gz",
+                vec![ArchivePreviewEntry {
+                    path: target_name,
+                    is_directory: false,
+                    size: Some(total_size),
+                }],
+                1,
+            ))
+        }
+        "7z" | "rar" => Err(AppError::message(format!(
+            "Archive preview is not available yet for .{format} files."
+        ))),
+        other => Err(AppError::message(format!(
+            "Archive preview is not available yet for .{other} files."
+        ))),
+    }
 }
 
 fn read_word_relationships(

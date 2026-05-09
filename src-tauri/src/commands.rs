@@ -8,8 +8,8 @@ use tauri::State;
 use crate::{
     error::AppError,
     models::{
-        AgentHistoryEntry, AgentProfile, CreateSessionInput, DirectoryEntry, PresentationPreviewSlide,
-        SkillFileEntry, SpreadsheetPreviewPayload,
+        AgentHistoryEntry, AgentProfile, ArchivePreviewPayload, CreateSessionInput, DirectoryEntry,
+        PresentationPreviewSlide, SkillFileEntry, SpreadsheetPreviewPayload,
     },
     preview,
     AppState,
@@ -238,6 +238,11 @@ pub fn read_spreadsheet_preview(path: String) -> Result<SpreadsheetPreviewPayloa
 #[tauri::command]
 pub fn read_presentation_preview(path: String) -> Result<Vec<PresentationPreviewSlide>, AppError> {
     preview::read_presentation_preview(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn read_archive_preview(path: String) -> Result<ArchivePreviewPayload, AppError> {
+    preview::read_archive_preview(Path::new(&path))
 }
 
 #[tauri::command]

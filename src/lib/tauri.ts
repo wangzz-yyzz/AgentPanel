@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import type { AgentProfile } from "../types/agent";
 import type { AgentHistoryEntry, CreateSessionInput } from "../types/terminal";
 
@@ -48,6 +48,10 @@ export async function readBinaryFile(path: string) {
   return invoke<number[]>("read_binary_file", { path });
 }
 
+export function convertLocalFileSrc(path: string) {
+  return convertFileSrc(path);
+}
+
 export type SpreadsheetPreviewPayload = {
   kind: "spreadsheet";
   sheetName: string;
@@ -65,6 +69,19 @@ export type PresentationPreviewSlide = {
   notes?: string | null;
 };
 
+export type ArchivePreviewEntry = {
+  path: string;
+  isDirectory: boolean;
+  size?: number | null;
+};
+
+export type ArchivePreviewPayload = {
+  format: string;
+  entries: ArchivePreviewEntry[];
+  totalEntries: number;
+  truncated: boolean;
+};
+
 export async function readDocxPreview(path: string) {
   return invoke<string>("read_docx_preview", { path });
 }
@@ -75,6 +92,10 @@ export async function readSpreadsheetPreview(path: string) {
 
 export async function readPresentationPreview(path: string) {
   return invoke<PresentationPreviewSlide[]>("read_presentation_preview", { path });
+}
+
+export async function readArchivePreview(path: string) {
+  return invoke<ArchivePreviewPayload>("read_archive_preview", { path });
 }
 
 export async function writeTextFile(path: string, contents: string) {

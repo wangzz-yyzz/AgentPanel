@@ -553,6 +553,7 @@ export function TodoPanel({ panel, onPatch }: TodoPanelProps) {
   const [recentTaskIds, setRecentTaskIds] = useState<string[]>([]);
   const [completionPulseTaskId, setCompletionPulseTaskId] = useState<string>();
   const previousTaskIdsRef = useRef<string[]>(data.tasks.map((task) => task.id));
+  const recentTaskTimersRef = useRef<number[]>([]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -575,10 +576,22 @@ export function TodoPanel({ panel, onPatch }: TodoPanelProps) {
     setRecentTaskIds((current) => Array.from(new Set([...current, ...addedIds])));
     const timer = window.setTimeout(() => {
       setRecentTaskIds((current) => current.filter((id) => !addedIds.includes(id)));
+      recentTaskTimersRef.current = recentTaskTimersRef.current.filter((item) => item !== timer);
     }, 1000);
+    recentTaskTimersRef.current.push(timer);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      recentTaskTimersRef.current = recentTaskTimersRef.current.filter((item) => item !== timer);
+    };
   }, [data.tasks]);
+
+  useEffect(() => {
+    return () => {
+      recentTaskTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      recentTaskTimersRef.current = [];
+    };
+  }, []);
 
   const filteredTasks = useMemo(() => {
     if (data.filter === "open") {
@@ -695,6 +708,7 @@ export function TodoPanel({ panel, onPatch }: TodoPanelProps) {
         ) : (
           filteredTasks.map((task, index) => {
             const dueMeta = deadlineMeta(task, now);
+            const recent = recentTaskIds.includes(task.id);
 
             return (
               <div
@@ -715,15 +729,15 @@ export function TodoPanel({ panel, onPatch }: TodoPanelProps) {
                   setDraggingTaskId(undefined);
                 }}
                 className={[
-                  "animate-enter-soft rounded-[26px] border bg-white px-3 py-3 transition-all duration-300",
+                  "rounded-[26px] border bg-white px-3 py-3 transition-all duration-300",
                   task.completed
                     ? "border-emerald-200/80 bg-emerald-50/60 shadow-[0_8px_22px_rgba(34,197,94,0.08)]"
                     : "border-slate-200 shadow-[0_8px_24px_rgba(15,23,42,0.04)]",
                   draggingTaskId === task.id ? "scale-[0.985] opacity-70" : "",
-                  recentTaskIds.includes(task.id) ? "animate-success-flash" : "",
+                  recent ? "animate-success-flash" : "",
                   completionPulseTaskId === task.id ? "animate-attention" : ""
                 ].join(" ")}
-                style={{ animationDelay: `${index * 28}ms` }}
+                style={recent ? { animationDelay: `${index * 28}ms` } : undefined}
               >
                 <div className="flex items-start gap-3">
                   <button

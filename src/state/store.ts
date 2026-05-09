@@ -11,10 +11,12 @@ import {
 } from "../lib/support-panels";
 import { fileExtensionFromPath, previewKindForPath, type FilePreviewKind } from "../lib/file-preview";
 import {
+  convertLocalFileSrc,
   createSession,
   killSession,
   listAgentHistory,
   loadProfiles,
+  readArchivePreview,
   readFileAsDataUrl,
   readBinaryFile,
   readDocxPreview,
@@ -46,6 +48,16 @@ export type FilePreviewState = {
   dataUrl?: string;
   sourceUrl?: string;
   html?: string;
+  archive?: {
+    format: string;
+    entries: Array<{
+      path: string;
+      isDirectory: boolean;
+      size?: number;
+    }>;
+    totalEntries: number;
+    truncated: boolean;
+  };
   table?: {
     columns: string[];
     rows: string[][];
@@ -182,6 +194,8 @@ function previewLabelForKind(kind: FilePreviewKind) {
       return "Presentation";
     case "media":
       return "Media";
+    case "archive":
+      return "Archive";
   }
 }
 
@@ -1214,8 +1228,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           extension === "mov" ? "video/quicktime" :
           extension === "ogv" ? "video/ogg" :
           "application/octet-stream";
-        const bytes = await readBinaryFile(path);
-        const sourceUrl = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mimeType }));
+        const sourceUrl = convertLocalFileSrc(path);
         set((state) =>
           state.filePreview?.path === path
             ? {
@@ -1262,6 +1275,33 @@ export const useAppStore = create<AppState>((set, get) => ({
                   kind,
                   status: "ready",
                   html
+                }
+              }
+            : state
+        );
+        return;
+      }
+
+      if (kind === "archive") {
+        const archive = await readArchivePreview(path);
+        set((state) =>
+          state.filePreview?.path === path
+            ? {
+                filePreview: {
+                  path,
+                  title: nextTitle,
+                  kind,
+                  status: "ready",
+                  archive: {
+                    format: archive.format,
+                    totalEntries: archive.totalEntries,
+                    truncated: archive.truncated,
+                    entries: archive.entries.map((entry) => ({
+                      path: entry.path,
+                      isDirectory: entry.isDirectory,
+                      size: entry.size ?? undefined
+                    }))
+                  }
                 }
               }
             : state

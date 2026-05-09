@@ -1,5 +1,5 @@
 import { BookMarked, FileText, FileUp, FolderOpen, FolderPlus, RefreshCw, Sparkles, Trash2, X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { open } from "@tauri-apps/plugin-dialog";
 import { importSkillItems, listSkillFiles } from "../../lib/tauri";
@@ -45,6 +45,7 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
   const requestFilePreview = useAppStore((state) => state.requestFilePreview);
   const [entries, setEntries] = useState<SkillFileEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [hasScanned, setHasScanned] = useState(false);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string>();
   const [importError, setImportError] = useState<string>();
@@ -54,6 +55,9 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [pendingImportItems, setPendingImportItems] = useState<PendingSkillImportItem[]>([]);
   const previousEntryPathsRef = useRef<string[]>([]);
+  const hasEntrySnapshotRef = useRef(false);
+  const refreshRequestRef = useRef(0);
+  const recentEntryTimersRef = useRef<number[]>([]);
 
   const groupedEntries = useMemo(() => {
     const groups: Record<string, SkillFileEntry[]> = {
@@ -71,26 +75,67 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
     return groups;
   }, [entries]);
 
-  const refreshSkills = async () => {
+  const markRecentEntryPaths = useCallback((paths: string[]) => {
+    if (paths.length === 0) {
+      return;
+    }
+
+    setRecentEntryPaths((current) => Array.from(new Set([...current, ...paths])));
+    const timer = window.setTimeout(() => {
+      setRecentEntryPaths((current) => current.filter((path) => !paths.includes(path)));
+      recentEntryTimersRef.current = recentEntryTimersRef.current.filter((item) => item !== timer);
+    }, 1000);
+    recentEntryTimersRef.current.push(timer);
+  }, []);
+
+  const refreshSkills = useCallback(async () => {
+    const requestId = refreshRequestRef.current + 1;
+    refreshRequestRef.current = requestId;
+
     if (!workspacePath.trim()) {
       setEntries([]);
       setError("Workspace path is empty.");
+      setLastScannedAt(undefined);
+      setHasScanned(true);
+      setLoading(false);
       return;
     }
 
     setLoading(true);
     try {
       const nextEntries = await listSkillFiles(workspacePath);
+      if (refreshRequestRef.current !== requestId) {
+        return;
+      }
+
+      const nextPaths = nextEntries.map((entry) => entry.path);
+      const previousPaths = previousEntryPathsRef.current;
+      const addedPaths = hasEntrySnapshotRef.current
+        ? nextPaths.filter((path) => !previousPaths.includes(path))
+        : [];
+
+      previousEntryPathsRef.current = nextPaths;
+      hasEntrySnapshotRef.current = true;
       setEntries(nextEntries);
+      markRecentEntryPaths(addedPaths);
       setError(undefined);
       setLastScannedAt(new Date().toISOString());
     } catch (loadError) {
-      setEntries([]);
+      if (refreshRequestRef.current !== requestId) {
+        return;
+      }
+
+      if (!hasEntrySnapshotRef.current) {
+        setEntries([]);
+      }
       setError(loadError instanceof Error ? loadError.message : "Unable to scan skill files.");
     } finally {
-      setLoading(false);
+      if (refreshRequestRef.current === requestId) {
+        setLoading(false);
+        setHasScanned(true);
+      }
     }
-  };
+  }, [markRecentEntryPaths, workspacePath]);
 
   const closeImportDialog = () => {
     if (importing) {
@@ -208,26 +253,27 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
   };
 
   useEffect(() => {
+    refreshRequestRef.current += 1;
+    recentEntryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    recentEntryTimersRef.current = [];
+    previousEntryPathsRef.current = [];
+    hasEntrySnapshotRef.current = false;
+    setEntries([]);
+    setRecentEntryPaths([]);
+    setError(undefined);
+    setLastScannedAt(undefined);
+    setStatusMessage(undefined);
+    setHasScanned(false);
     void refreshSkills();
-  }, [workspacePath]);
+  }, [refreshSkills]);
 
   useEffect(() => {
-    const previousPaths = previousEntryPathsRef.current;
-    const nextPaths = entries.map((entry) => entry.path);
-    const addedPaths = nextPaths.filter((path) => !previousPaths.includes(path));
-    previousEntryPathsRef.current = nextPaths;
-
-    if (addedPaths.length === 0) {
-      return;
-    }
-
-    setRecentEntryPaths((current) => Array.from(new Set([...current, ...addedPaths])));
-    const timer = window.setTimeout(() => {
-      setRecentEntryPaths((current) => current.filter((path) => !addedPaths.includes(path)));
-    }, 1000);
-
-    return () => window.clearTimeout(timer);
-  }, [entries]);
+    return () => {
+      refreshRequestRef.current += 1;
+      recentEntryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      recentEntryTimersRef.current = [];
+    };
+  }, []);
 
   useEffect(() => {
     if (!importDialogOpen) {
@@ -259,6 +305,8 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
 
   const actionButtonClassName =
     "inline-flex items-center gap-2 rounded-pill border border-[#1f8a70] bg-[#1f8a70] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#125b50] disabled:cursor-not-allowed disabled:opacity-50";
+  const initialLoading = loading && !hasScanned && entries.length === 0;
+  const refreshingWithEntries = loading && entries.length > 0;
 
   const importDialog =
     importDialogOpen && typeof document !== "undefined"
@@ -457,28 +505,36 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
             Last scan {new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(lastScannedAt))}
           </div>
         ) : null}
+        {refreshingWithEntries ? (
+          <div className="mt-2 text-xs font-semibold uppercase tracking-[0.16em] text-[#1f8a70]">
+            Refreshing skill index...
+          </div>
+        ) : null}
         {statusMessage ? <div className="animate-panel-swap mt-2 text-sm text-[#125b50]">{statusMessage}</div> : null}
       </div>
 
       <div className="terminal-scrollbar h-[300px] overflow-y-auto pr-1">
         {error ? (
-          <div className="rounded-[24px] border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">{error}</div>
-        ) : loading ? (
+          <div className="mb-3 rounded-[24px] border border-red-200 bg-red-50 px-4 py-4 text-sm text-red-700">
+            {error}
+            {entries.length > 0 ? <span className="ml-1 text-red-600">Showing the last successful scan.</span> : null}
+          </div>
+        ) : null}
+        {initialLoading ? (
           <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-5 text-sm text-slate-500">
             Scanning `skills` and `.skills` for file and folder skills...
           </div>
-        ) : entries.length === 0 ? (
+        ) : entries.length === 0 && !error ? (
           <div className="rounded-[24px] border border-dashed border-slate-200 bg-slate-50/70 px-4 py-5 text-sm text-slate-500">
             No skills found under `skills/` or `.skills/`.
           </div>
-        ) : (
+        ) : entries.length > 0 ? (
           <div className="grid gap-3">
-            {(["skills", ".skills"] as const).map((sourceRoot, sectionIndex) =>
+            {(["skills", ".skills"] as const).map((sourceRoot) =>
               groupedEntries[sourceRoot]?.length ? (
                 <section
-                  key={`${sourceRoot}:${lastScannedAt ?? "initial"}`}
-                  className="animate-panel-swap rounded-[24px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
-                  style={{ animationDelay: `${sectionIndex * 45}ms` }}
+                  key={sourceRoot}
+                  className="rounded-[24px] border border-slate-200 bg-white p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]"
                 >
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
@@ -490,46 +546,50 @@ export function SkillsPanel({ workspacePath }: SkillsPanelProps) {
                     </div>
                   </div>
                   <div className="space-y-2">
-                    {groupedEntries[sourceRoot].map((entry, index) => (
-                      <button
-                        key={entry.path}
-                        type="button"
-                        onClick={() => void requestFilePreview(entry.previewPath, entry.name)}
-                        className={[
-                          "ui-action animate-enter-soft w-full rounded-[20px] border border-slate-200 bg-slate-50/80 px-4 py-3 text-left transition hover:border-[#1f8a70]/30 hover:bg-white",
-                          recentEntryPaths.includes(entry.path) ? "animate-success-flash" : ""
-                        ].join(" ")}
-                        style={{ animationDelay: `${index * 28}ms` }}
-                      >
-                        <div className="flex items-center gap-2 text-sm font-semibold tracking-[-0.02em] text-slate-900">
-                          {entry.isDirectory ? (
-                            <FolderOpen className="h-4 w-4 shrink-0 text-[#1f8a70]" />
-                          ) : (
-                            <FileText className="h-4 w-4 shrink-0 text-slate-500" />
-                          )}
-                          <span className="truncate" title={entry.name}>
-                            {entry.name}
-                          </span>
-                        </div>
-                        <div className="mt-1 truncate-start text-xs font-semibold uppercase tracking-[0.16em] text-slate-500" title={entry.relativePath}>
-                          {entry.relativePath}
-                        </div>
-                        {entry.isDirectory ? (
-                          <div
-                            className="mt-1 truncate-start text-[11px] font-semibold uppercase tracking-[0.16em] text-[#1f8a70]"
-                            title={entry.previewPath}
-                          >
-                            Folder skill
+                    {groupedEntries[sourceRoot].map((entry, index) => {
+                      const recent = recentEntryPaths.includes(entry.path);
+
+                      return (
+                        <button
+                          key={entry.path}
+                          type="button"
+                          onClick={() => void requestFilePreview(entry.previewPath, entry.name)}
+                          className={[
+                            "ui-action w-full rounded-[20px] border border-slate-200 bg-slate-50/80 px-4 py-3 text-left transition hover:border-[#1f8a70]/30 hover:bg-white",
+                            recent ? "animate-success-flash" : ""
+                          ].join(" ")}
+                          style={recent ? { animationDelay: `${index * 28}ms` } : undefined}
+                        >
+                          <div className="flex items-center gap-2 text-sm font-semibold tracking-[-0.02em] text-slate-900">
+                            {entry.isDirectory ? (
+                              <FolderOpen className="h-4 w-4 shrink-0 text-[#1f8a70]" />
+                            ) : (
+                              <FileText className="h-4 w-4 shrink-0 text-slate-500" />
+                            )}
+                            <span className="truncate" title={entry.name}>
+                              {entry.name}
+                            </span>
                           </div>
-                        ) : null}
-                      </button>
-                    ))}
+                          <div className="mt-1 truncate-start text-xs font-semibold uppercase tracking-[0.16em] text-slate-500" title={entry.relativePath}>
+                            {entry.relativePath}
+                          </div>
+                          {entry.isDirectory ? (
+                            <div
+                              className="mt-1 truncate-start text-[11px] font-semibold uppercase tracking-[0.16em] text-[#1f8a70]"
+                              title={entry.previewPath}
+                            >
+                              Folder skill
+                            </div>
+                          ) : null}
+                        </button>
+                      );
+                    })}
                   </div>
                 </section>
               ) : null
             )}
           </div>
-        )}
+        ) : null}
       </div>
       {importDialog}
     </div>

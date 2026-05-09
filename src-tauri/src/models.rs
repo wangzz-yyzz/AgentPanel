@@ -95,3 +95,20 @@ pub struct PresentationPreviewSlide {
     pub bullets: Vec<String>,
     pub notes: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivePreviewEntry {
+    pub path: String,
+    pub is_directory: bool,
+    pub size: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchivePreviewPayload {
+    pub format: String,
+    pub entries: Vec<ArchivePreviewEntry>,
+    pub total_entries: usize,
+    pub truncated: bool,
+}

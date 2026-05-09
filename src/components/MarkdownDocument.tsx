@@ -1,18 +1,34 @@
-import ReactMarkdown, { type Components } from "react-markdown";
+import { useEffect, useState, type ImgHTMLAttributes } from "react";
+import ReactMarkdown, { defaultUrlTransform, type Components } from "react-markdown";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize, { defaultSchema, type Options as SanitizeOptions } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
+import {
+  LOCAL_MARKDOWN_ASSET_PROTOCOL,
+  createLocalMarkdownAssetUrl,
+  decodeLocalMarkdownAssetUrl,
+  resolveMarkdownAssetPath
+} from "../lib/markdown-assets";
+import { readFileAsDataUrl } from "../lib/tauri";
 
 type MarkdownDocumentProps = {
   markdown: string;
   emptyMessage?: string;
   className?: string;
+  sourcePath?: string;
 };
 
 function mergeClasses(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
+
+type RehypeElementNode = {
+  type?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  children?: RehypeElementNode[];
+};
 
 const markdownSanitizeSchema: SanitizeOptions = {
   ...defaultSchema,
@@ -49,9 +65,125 @@ const markdownSanitizeSchema: SanitizeOptions = {
   },
   protocols: {
     ...defaultSchema.protocols,
-    src: [...(defaultSchema.protocols?.src ?? ["http", "https"])]
+    src: [...new Set([...(defaultSchema.protocols?.src ?? ["http", "https"]), "blob", "data", LOCAL_MARKDOWN_ASSET_PROTOCOL])]
   }
 };
+
+function visitRehypeNodes(node: RehypeElementNode | undefined, visitor: (node: RehypeElementNode) => void) {
+  if (!node) {
+    return;
+  }
+
+  visitor(node);
+  if (!Array.isArray(node.children)) {
+    return;
+  }
+
+  for (const child of node.children) {
+    visitRehypeNodes(child, visitor);
+  }
+}
+
+function rehypeResolveLocalMarkdownImageUrls({ sourcePath }: { sourcePath?: string }) {
+  return (tree: RehypeElementNode) => {
+    visitRehypeNodes(tree, (node) => {
+      if (node.type !== "element" || node.tagName !== "img" || !node.properties) {
+        return;
+      }
+
+      const source = typeof node.properties.src === "string" ? node.properties.src : undefined;
+      if (!source) {
+        return;
+      }
+
+      const resolvedPath = resolveMarkdownAssetPath(sourcePath, source);
+      if (!resolvedPath) {
+        return;
+      }
+
+      node.properties.src = createLocalMarkdownAssetUrl(resolvedPath);
+    });
+  };
+}
+
+function markdownUrlTransform(value: string) {
+  if (decodeLocalMarkdownAssetUrl(value)) {
+    return value;
+  }
+
+  return defaultUrlTransform(value);
+}
+
+function MarkdownImage({ src, alt, className, ...props }: ImgHTMLAttributes<HTMLImageElement>) {
+  const [resolvedSource, setResolvedSource] = useState<string | undefined>(() =>
+    typeof src === "string" && !decodeLocalMarkdownAssetUrl(src) ? src : undefined
+  );
+  const [loadError, setLoadError] = useState<string>();
+
+  useEffect(() => {
+    let cancelled = false;
+    const nextSource = typeof src === "string" ? src : "";
+    const localPath = nextSource ? decodeLocalMarkdownAssetUrl(nextSource) : undefined;
+
+    setLoadError(undefined);
+
+    if (!nextSource) {
+      setResolvedSource(undefined);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (!localPath) {
+      setResolvedSource(nextSource);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setResolvedSource(undefined);
+    void readFileAsDataUrl(localPath)
+      .then((dataUrl) => {
+        if (cancelled) {
+          return;
+        }
+        setResolvedSource(dataUrl);
+      })
+      .catch((error: unknown) => {
+        if (cancelled) {
+          return;
+        }
+        setLoadError(error instanceof Error ? error.message : "Unable to load this local image.");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [src]);
+
+  if (!resolvedSource) {
+    return (
+      <span
+        className={mergeClasses(
+          "inline-flex min-h-24 w-full items-center justify-center rounded-[20px] border border-dashed border-slate-200 bg-slate-50 px-4 py-4 text-sm text-slate-500",
+          className
+        )}
+      >
+        {loadError || (alt ? `Loading image: ${alt}` : "Loading image...")}
+      </span>
+    );
+  }
+
+  return (
+    <img
+      {...props}
+      src={resolvedSource}
+      alt={alt ?? ""}
+      loading="lazy"
+      className={mergeClasses("max-h-[480px] max-w-full rounded-[20px] border border-slate-200 bg-white object-contain shadow-[0_10px_24px_rgba(15,23,42,0.05)]", className)}
+    />
+  );
+}
 
 const markdownComponents = {
   h1: ({ children, className, ...props }) => <h1 {...props} className={mergeClasses("text-3xl font-semibold tracking-[-0.04em] text-slate-950", className)}>{children}</h1>,
@@ -162,15 +294,7 @@ const markdownComponents = {
       {children}
     </td>
   ),
-  img: ({ src, alt, className, ...props }) => (
-    <img
-      {...props}
-      src={src}
-      alt={alt ?? ""}
-      loading="lazy"
-      className={mergeClasses("max-h-[480px] max-w-full rounded-[20px] border border-slate-200 bg-white object-contain shadow-[0_10px_24px_rgba(15,23,42,0.05)]", className)}
-    />
-  ),
+  img: MarkdownImage,
   details: ({ children, className, ...props }) => <details {...props} className={mergeClasses("rounded-[20px] border border-slate-200 bg-white px-4 py-3", className)}>{children}</details>,
   summary: ({ children, className, ...props }) => <summary {...props} className={mergeClasses("cursor-pointer list-none font-semibold text-slate-900", className)}>{children}</summary>,
   kbd: ({ children, ...props }) => (
@@ -218,7 +342,8 @@ const markdownComponents = {
 export function MarkdownDocument({
   markdown,
   emptyMessage = "Nothing to preview yet.",
-  className = "space-y-4"
+  className = "space-y-4",
+  sourcePath
 }: MarkdownDocumentProps) {
   if (!markdown.trim()) {
     return <div className="text-sm text-slate-400">{emptyMessage}</div>;
@@ -229,8 +354,9 @@ export function MarkdownDocument({
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         remarkRehypeOptions={{ allowDangerousHtml: true }}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, markdownSanitizeSchema]]}
+        rehypePlugins={[rehypeRaw, [rehypeResolveLocalMarkdownImageUrls, { sourcePath }], [rehypeSanitize, markdownSanitizeSchema]]}
         components={markdownComponents}
+        urlTransform={markdownUrlTransform}
       >
         {markdown}
       </ReactMarkdown>
